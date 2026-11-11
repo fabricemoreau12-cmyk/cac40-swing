@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "frozen_on": "2026-11-10",
+  "created_utc": "2026-11-11 14:25",
+  "note": "Paramètres figés au premier lancement de la V2 (meilleure combinaison des 8 années précédentes). Supprimer ce fichier pour re-geler (le suivi à blanc repart alors de zéro).",
+  "long": {
+    "ext": 2.5,
+    "rsi": 40,
+    "confirm": "aucun",
+    "trend": "avec",
+    "stopbuf": 0.25,
+    "exit": "trail",
+    "side": "long"
+  },
+  "short": {
+    "ext": 3.5,
+    "rsi": null,
+    "confirm": "rejet",
+    "trend": "avec",
+    "stopbuf": 0.75,
+    "exit": "2R",
+    "side": "short"
+  }
+}
