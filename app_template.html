@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAC 40 Swing</title>
+<style>
+:root{
+  --bg:#0f1318; --panel:#171c23; --panel2:#1e252e; --line:#2a323d; --ink:#e6eaf0; --ink2:#a9b3c1; --ink3:#7a8594;
+  --up:#22ab94; --down:#f23645; --sup:#4c8dff; --res:#ff9f43; --warn:#f5b041; --accent:#5aa9ff;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.45 "Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif}
+header{display:flex;align-items:center;gap:14px;padding:10px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+header h1{font-size:17px;margin:0;font-weight:600;letter-spacing:.2px}
+header .meta{color:var(--ink2);font-size:12.5px}
+header .sp{flex:1}
+button,.btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 12px;font:inherit;cursor:pointer}
+button:hover,.btn:hover{border-color:var(--accent)}
+button.primary{background:#1f4f86;border-color:#2c6bb3}
+nav{display:flex;gap:2px;padding:0 18px;background:var(--panel);border-bottom:1px solid var(--line)}
+nav button{border:none;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--ink2);padding:10px 14px}
+nav button.on{color:var(--ink);border-bottom-color:var(--accent)}
+main{padding:16px 18px;max-width:1500px;margin:0 auto}
+.tab{display:none}.tab.on{display:block}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:repeat(3,1fr)}.g4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:1000px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card h2{font-size:14px;margin:0 0 10px;color:var(--ink2);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+.card h3{font-size:14px;margin:12px 0 6px}
+.tile .v{font-size:24px;font-weight:600}.tile .l{color:var(--ink2);font-size:12.5px}
+.tile .s{color:var(--ink3);font-size:12px}
+.big{font-size:22px;font-weight:700;margin:2px 0 6px}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid var(--line)}
+.p-up{color:var(--up);border-color:var(--up)} .p-down{color:var(--down);border-color:var(--down)} .p-neutral{color:var(--ink2)}
+.p-warn{color:var(--warn);border-color:var(--warn)}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th{color:var(--ink2);font-weight:600;position:sticky;top:0;background:var(--panel)}
+td:first-child,th:first-child{text-align:left}
+td.l,th.l{text-align:left}
+.scroll{max-height:460px;overflow:auto}
+.ok{color:var(--up)} .ko{color:var(--down)} .na{color:var(--ink3)}
+.muted{color:var(--ink2)} .small{font-size:12.5px}
+.note{background:#1b2230;border:1px solid #2b3a52;border-radius:8px;padding:10px 12px;color:var(--ink2);font-size:13px}
+.warnbox{background:#2a2113;border:1px solid #6b4d1a;border-radius:8px;padding:10px 12px;color:#f3d39b;font-size:13px}
+.errbox{background:#2b1518;border:1px solid #7a2a33;border-radius:8px;padding:10px 12px;color:#ffb3bb;font-size:13px}
+#chart{height:560px} #equity{height:300px}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.toolbar label{color:var(--ink2);font-size:13px;display:flex;gap:5px;align-items:center}
+.form{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px 14px}
+.form label{display:flex;flex-direction:column;gap:4px;color:var(--ink2);font-size:12.5px}
+input,select{background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit}
+input:focus,select:focus{outline:none;border-color:var(--accent)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px}
+.kv div:nth-child(odd){color:var(--ink2)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--ink2);font-size:12.5px;margin-top:6px}
+.legend i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
+dialog{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;width:min(560px,92vw)}
+dialog::backdrop{background:rgba(0,0,0,.55)}
+#status{font-size:12.5px;color:var(--ink2)}
+.method p{margin:6px 0 10px;color:var(--ink2)} .method li{color:var(--ink2);margin:3px 0}
+.method b{color:var(--ink)}
+</style>
+</head>
+<body>
+<header>
+  <h1>CAC 40 Swing</h1>
+  <span class="meta" id="meta">Aucune donnée chargée</span>
+  <span class="sp"></span>
+  <span id="status"></span>
+  <button class="primary" id="btnRefresh" title="Télécharger le dernier résultat depuis GitHub">Actualiser</button>
+  <label class="btn" title="Charger un fichier cac40_swing.json">Importer…<input type="file" id="fileIn" accept=".json" hidden></label>
+  <button id="btnSettings">Réglages</button>
+</header>
+<nav id="nav">
+  <button data-t="today" class="on">Aujourd'hui</button>
+  <button data-t="chart">Graphique</button>
+  <button data-t="perf">Performance hors échantillon</button>
+  <button data-t="research">Retournements passés</button>
+  <button data-t="turbo">Calculateur turbo</button>
+  <button data-t="method">Méthode</button>
+</nav>
+<main>
+  <div id="empty" class="note" style="display:none">
+    Aucune donnée. Cliquez sur <b>Réglages</b> pour indiquer votre dépôt GitHub (propriétaire / nom du dépôt), puis <b>Actualiser</b>,
+    ou utilisez <b>Importer…</b> pour ouvrir un fichier <code>cac40_swing.json</code>.
+  </div>
+
+  <!-- AUJOURD'HUI -->
+  <section class="tab on" id="t-today">
+    <div class="grid g4" id="tiles"></div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card" id="signalCard"></div>
+      <div class="card" id="levelsCard"></div>
+    </div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card" id="condCard"></div>
+      <div class="card" id="cfgCard"></div>
+    </div>
+  </section>
+
+  <!-- GRAPHIQUE -->
+  <section class="tab" id="t-chart">
+    <div class="card">
+      <div class="toolbar">
+        <button data-r="126">6 mois</button><button data-r="252">1 an</button><button data-r="756">3 ans</button><button data-r="2520">10 ans</button><button data-r="0">Tout</button>
+        <span style="width:14px"></span>
+        <label><input type="checkbox" id="cbLevels" checked> Niveaux clés actuels</label>
+        <label><input type="checkbox" id="cbTrades" checked> Trades hors échantillon</label>
+        <label><input type="checkbox" id="cbSma" checked> SMA 200</label>
+        <label>ZigZag <select id="selZz"><option value="">aucun</option></select></label>
+      </div>
+      <div id="chart"></div>
+      <div class="legend">
+        <span><i style="background:var(--sup)"></i>Support</span><span><i style="background:var(--res)"></i>Résistance</span>
+        <span><i style="background:#9aa4b2"></i>SMA 200</span><span><i style="background:#c9a227"></i>ZigZag (descriptif, a posteriori)</span>
+        <span>▲/▼ entrée hors échantillon · ● sortie (résultat en R)</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- PERFORMANCE -->
+  <section class="tab" id="t-perf">
+    <div class="grid g4" id="perfTiles"></div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card"><h2>Courbe cumulée (en R, hors échantillon)</h2><div id="equity"></div></div>
+      <div class="card" id="benchCard"></div>
+    </div>
+    <div class="card" style="margin-top:14px"><h2>Walk-forward : apprentissage 8 ans → test 2 ans</h2><div class="scroll" id="wfTable"></div></div>
+    <div class="card" style="margin-top:14px"><h2>Trades hors échantillon</h2><div class="scroll" id="tradesTable"></div></div>
+  </section>
+
+  <!-- RECHERCHE -->
+  <section class="tab" id="t-research">
+    <div class="note" style="margin-bottom:14px">
+      Les pivots ZigZag sont identifiés <b>a posteriori</b> (il faut attendre le recul ou la hausse de X % pour les connaître) :
+      ils servent uniquement à décrire les retournements passés et à mesurer si les conditions du setup les précédaient plus souvent que le hasard.
+      Lecture : « probabilité qu'un pivot ZigZag du bon sens se situe à ±2 séances du jour où la condition est remplie ».
+    </div>
+    <div id="researchBox"></div>
+  </section>
+
+  <!-- TURBO -->
+  <section class="tab" id="t-turbo">
+    <div class="card">
+      <h2>Dimensionnement d'une position en turbo</h2>
+      <div class="toolbar"><button id="btnUseSignal">Reprendre le signal du jour</button><span class="muted small" id="useSignalInfo"></span></div>
+      <div class="form" id="turboForm">
+        <label>Sens<select id="tb_side"><option value="long">Call (haussier)</option><option value="short">Short / Put (baissier)</option></select></label>
+        <label>Capital (€)<input id="tb_cap" type="number" step="100" value="10000"></label>
+        <label>Risque max par trade (% du capital)<input id="tb_riskpct" type="number" step="0.1" value="1"></label>
+        <label>Entrée (niveau CAC 40)<input id="tb_entry" type="number" step="0.01"></label>
+        <label>Stop (niveau CAC 40)<input id="tb_stop" type="number" step="0.01"></label>
+        <label>Objectif (niveau CAC 40)<input id="tb_target" type="number" step="0.01"></label>
+        <label>Prix d'exercice du turbo (strike)<input id="tb_strike" type="number" step="0.01"></label>
+        <label>Barrière désactivante (KO)<input id="tb_barrier" type="number" step="0.01"></label>
+        <label>Parité (nb de turbos pour 1 indice)<input id="tb_parity" type="number" step="1" value="100"></label>
+        <label>Prix d'achat du turbo (€, si connu)<input id="tb_price" type="number" step="0.001" placeholder="sinon : valeur intrinsèque"></label>
+        <label>Courtage par ordre (€)<input id="tb_fee" type="number" step="0.01" value="0"></label>
+        <label>Taxe (TOB) en % par opération<input id="tb_tob" type="number" step="0.01" value="0" placeholder="à vérifier"></label>
+        <label>ATR(14) du CAC 40 (points)<input id="tb_atr" type="number" step="0.01"></label>
+      </div>
+      <div id="turboOut" style="margin-top:14px"></div>
+      <div class="note" style="margin-top:12px">
+        Hypothèses : turbo sur l'indice CAC 40 coté en euros, variation de 1/parité € par point d'indice ;
+        coûts de financement et variation du spread non modélisés. Les frais et le taux de TOB sont à saisir par vous
+        (à vérifier auprès de votre courtier / du SPF Finances) — l'outil ne les présume pas.
+        Un turbo touche sa barrière en séance, y compris lors d'un gap : si la barrière est franchie, la position est désactivée et la perte peut être totale.
+      </div>
+    </div>
+  </section>
+
+  <!-- METHODE -->
+  <section class="tab method" id="t-method">
+    <div class="card">
+      <h2>Comment l'outil décide</h2>
+      <p>Chaque soir de bourse, GitHub Actions télécharge l'historique journalier du CAC 40 (Yahoo Finance, <code>^FCHI</code>, depuis 1990), recalcule tout et publie le fichier lu par cette application. Toutes les décisions sont prises <b>à la clôture</b>, avec uniquement les informations disponibles ce jour-là.</p>
+      <h3>1. Niveaux clés</h3>
+      <p>Un <b>point haut</b> (ou bas) est la séance la plus haute (basse) sur 5 séances de part et d'autre ; il n'est utilisé qu'une fois confirmé, soit 5 séances plus tard. Les points des ~2 dernières années (500 séances) forment les niveaux clés ; plusieurs points proches forment une zone (le nombre de « touches » mesure sa force). Un ancien sommet peut servir de support et inversement.</p>
+      <h3>2. Setup de retournement (achat — symétrique pour la vente)</h3>
+      <ul>
+        <li><b>Excès</b> : le CAC a baissé d'au moins E × ATR(14) depuis le plus haut des 15 dernières séances.</li>
+        <li><b>Niveau</b> : le plus bas des 3 dernières séances arrive à ± tol × ATR d'au moins N anciens points hauts/bas.</li>
+        <li><b>Rejet</b> (option) : clôture dans la moitié haute de la bougie et au-dessus de la clôture de la veille.</li>
+        <li><b>RSI</b> (option) : RSI(14) ≤ 35 sur l'une des 3 dernières séances (≥ 65 pour la vente).</li>
+        <li><b>Tendance</b> (option) : n'acheter qu'au-dessus de la SMA 200, ne vendre qu'en dessous.</li>
+      </ul>
+      <h3>3. Exécution</h3>
+      <ul>
+        <li><b>Entrée</b> : ordre stop au-dessus du plus haut de la bougie signal + 0,1 ATR (le marché doit confirmer le retournement), valable 3 séances ; annulé si le stop est touché avant.</li>
+        <li><b>Stop</b> : sous le plus bas des 5 dernières séances − b × ATR : si ce niveau casse, le retournement est invalidé.</li>
+        <li><b>Sortie</b> : objectif 2R ou 3R, ou stop suiveur (break-even à +1R puis 3 ATR sous la meilleure clôture). Sortie forcée après 40 séances.</li>
+        <li>Hypothèses prudentes : si le stop et l'objectif sont touchés la même séance, le stop est compté ; un gap au-delà du stop est exécuté à l'ouverture.</li>
+      </ul>
+      <h3>4. Choix des paramètres sans tricher (walk-forward)</h3>
+      <p>576 combinaisons (E, tol, N, rejet, RSI, tendance, b, sortie) sont testées. Pour chaque bloc de 2 ans, la combinaison est choisie <b>uniquement</b> sur les 8 années précédentes (critère : espérance × √nombre de trades, au moins 20 trades), puis appliquée telle quelle aux 2 années suivantes. Seuls ces résultats « hors échantillon » sont affichés comme performance. Si aucune combinaison n'est positive à l'apprentissage, l'outil ne trade pas la période suivante.</p>
+      <h3>5. Contrôle par le hasard</h3>
+      <p>Les mêmes trades (même sens, mêmes stops et sorties, mêmes périodes) sont rejoués 300 fois avec des dates d'entrée tirées au hasard. Si une part importante des tirages aléatoires fait aussi bien que le système, l'avantage du signal n'est pas démontré.</p>
+      <h3>Limites</h3>
+      <ul>
+        <li>Résultats en R <b>hors frais</b>, spread et financement des turbos (paramètre <code>COST_POINTS</code> du moteur pour les intégrer).</li>
+        <li>Données Yahoo Finance : qualité non garantie, notamment pour les ouvertures anciennes.</li>
+        <li>Le passé ne garantit pas l'avenir ; un échantillon de moins de ~30 trades est statistiquement fragile.</li>
+        <li>Outil d'aide à la décision, pas un conseil en investissement.</li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<dialog id="dlg">
+  <h3 style="margin-top:0">Réglages</h3>
+  <div class="form" style="grid-template-columns:1fr 1fr">
+    <label>Propriétaire GitHub<input id="s_owner" placeholder="ex. mon-compte"></label>
+    <label>Dépôt<input id="s_repo" value="cac40-swing"></label>
+    <label>Branche<input id="s_branch" value="main"></label>
+    <label>Fichier<input id="s_path" value="data/cac40_swing.json"></label>
+    <label style="grid-column:1/-1">Jeton GitHub (uniquement si le dépôt est privé — droit « Contents : read-only »)<input id="s_token" type="password" placeholder="github_pat_…"></label>
+  </div>
+  <p class="muted small">Ces réglages restent dans ce navigateur, sur cet ordinateur.</p>
+  <div style="display:flex;gap:8px;justify-content:flex-end"><button id="s_cancel">Annuler</button><button class="primary" id="s_save">Enregistrer</button></div>
+</dialog>
+
+<script>/*__LWC__*/</script>
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const NF = (v, d = 2) => (v === null || v === undefined || !isFinite(v)) ? "—" : Number(v).toLocaleString("fr-BE", {minimumFractionDigits: d, maximumFractionDigits: d});
+const PCT = (v, d = 1) => (v === null || v === undefined) ? "—" : NF(v * 100, d) + " %";
+const SGN = (v, d = 2) => (v === null || v === undefined) ? "—" : (v > 0 ? "+" : "") + NF(v, d);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("cac40swing." + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem("cac40swing." + k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+};
+let D = null, chart = null, candle = null, smaS = null, zzS = null, eqChart = null, levelLines = [];
+
+/* ---------- navigation ---------- */
+$("#nav").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  document.querySelectorAll("#nav button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", x.id === "t-" + b.dataset.t));
+  if (b.dataset.t === "chart" && chart) setTimeout(() => { chart.applyOptions({width: $("#chart").clientWidth}); if (!chart._ranged) { setRange(252); chart._ranged = true; } }, 0);
+  if (b.dataset.t === "perf" && eqChart) setTimeout(() => { eqChart.applyOptions({width: $("#equity").clientWidth}); eqChart.timeScale().fitContent(); }, 0);
+});
+
+/* ---------- réglages / chargement ---------- */
+const S = () => store.get("settings", {owner: "", repo: "cac40-swing", branch: "main", path: "data/cac40_swing.json", token: ""});
+$("#btnSettings").onclick = () => { const s = S(); for (const k of ["owner","repo","branch","path","token"]) $("#s_" + k).value = s[k] || ""; $("#dlg").showModal(); };
+$("#s_cancel").onclick = () => $("#dlg").close();
+$("#s_save").onclick = () => { const s = {}; for (const k of ["owner","repo","branch","path","token"]) s[k] = $("#s_" + k).value.trim(); store.set("settings", s); $("#dlg").close(); refresh(); };
+$("#btnRefresh").onclick = () => refresh();
+$("#fileIn").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try { load(JSON.parse(await f.text()), "fichier " + f.name); } catch (err) { status("Fichier illisible : " + err.message, true); }
+  e.target.value = "";
+};
+function status(msg, bad) { const el = $("#status"); el.textContent = msg; el.style.color = bad ? "var(--down)" : "var(--ink2)"; }
+
+async function refresh() {
+  const s = S();
+  if (!s.owner || !s.repo) { $("#btnSettings").click(); return; }
+  status("Téléchargement…");
+  const url = `https://api.github.com/repos/${encodeURIComponent(s.owner)}/${encodeURIComponent(s.repo)}/contents/${s.path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(s.branch || "main")}`;
+  const h = {"Accept": "application/vnd.github.raw+json"};
+  if (s.token) h["Authorization"] = "Bearer " + s.token;
+  try {
+    const r = await fetch(url, {headers: h, cache: "no-store"});
+    if (!r.ok) throw new Error(r.status === 404 ? "fichier introuvable (dépôt, branche, chemin ou jeton ?)" : r.status === 401 ? "jeton refusé" : r.status === 403 ? "accès refusé ou limite d'appels GitHub atteinte" : "HTTP " + r.status);
+    const j = await r.json();
+    load(j, "GitHub " + s.owner + "/" + s.repo);
+    store.set("cache", j);
+  } catch (err) { status("Échec : " + err.message, true); }
+}
+
+function load(j, from) {
+  if (!j || !j.ohlc || !j.last) { status("Format de fichier inattendu", true); return; }
+  D = j;
+  $("#empty").style.display = "none";
+  $("#meta").textContent = `Clôture du ${fmtDate(j.last.date)} · calcul ${j.generated_utc} UTC · ${j.source}`;
+  status("Chargé depuis " + from);
+  renderToday(); renderChart(); renderPerf(); renderResearch(); fillTurboFromSignal(false); calcTurbo();
+}
+const fmtDate = d => d ? d.split("-").reverse().join("/") : "—";
+
+/* ---------- AUJOURD'HUI ---------- */
+function renderToday() {
+  const L = D.last, C = D.current;
+  const trend = L.close > L.sma200 ? `<span class="pill p-up">au-dessus</span>` : `<span class="pill p-down">en dessous</span>`;
+  const prev = D.ohlc.length > 1 ? D.ohlc[D.ohlc.length - 2][4] : null;
+  const ch = prev ? (L.close / prev - 1) : null;
+  $("#tiles").innerHTML = `
+    <div class="card tile"><div class="l">CAC 40 — clôture ${fmtDate(L.date)}</div><div class="v">${NF(L.close)}</div><div class="s ${ch >= 0 ? "ok" : "ko"}">${ch === null ? "" : SGN(ch * 100) + " %"}</div></div>
+    <div class="card tile"><div class="l">ATR(14) — amplitude moyenne d'une séance</div><div class="v">${NF(L.atr)}</div><div class="s">${NF(L.atr / L.close * 100)} % du cours</div></div>
+    <div class="card tile"><div class="l">RSI(14)</div><div class="v">${NF(L.rsi, 1)}</div><div class="s">${L.rsi >= 65 ? "zone haute" : L.rsi <= 35 ? "zone basse" : "zone neutre"}</div></div>
+    <div class="card tile"><div class="l">SMA 200 (tendance de fond)</div><div class="v">${NF(L.sma200)}</div><div class="s">Cours ${trend}</div></div>`;
+
+  let h = `<h2>Signal</h2>`;
+  if (!C) {
+    h += `<div class="big muted">Pas de configuration exploitable</div><p class="muted">Aucune combinaison de paramètres n'a été positive sur les 8 dernières années : l'outil ne propose pas de trade.</p>`;
+  } else if (C.new_order) {
+    const o = C.new_order, up = o.side === "long";
+    h += `<div class="big ${up ? "ok" : "ko"}">${up ? "▲ SIGNAL CALL (achat)" : "▼ SIGNAL SHORT (vente)"}</div>
+      <div class="kv">
+        <div>Ordre stop de déclenchement</div><div><b>${NF(o.trigger)}</b> — valable ${o.valid_sessions} séances</div>
+        <div>Stop (invalidation)</div><div><b class="ko">${NF(o.stop)}</b> (${NF(o.risk_pts)} pts = ${NF(o.risk_pts / D.last.atr)} ATR)</div>
+        <div>Objectif 2R</div><div>${NF(o.target_2R)}</div>
+        <div>Objectif 3R</div><div>${NF(o.target_3R)}</div>
+        <div>Sortie retenue par le modèle</div><div>${C.params.exit === "trail" ? "stop suiveur (3 ATR, break-even à +1R)" : "objectif " + C.params.exit}</div>
+      </div>
+      <p class="muted small">L'ordre n'est exécuté que si le CAC dépasse ${up ? "à la hausse" : "à la baisse"} le niveau de déclenchement ; il est annulé si le stop est touché avant.</p>
+      <button onclick="document.querySelector('[data-t=turbo]').click()">Dimensionner en turbo →</button>`;
+  } else if (C.pending_order) {
+    const o = C.pending_order, up = o.side === "long";
+    h += `<div class="big" style="color:var(--warn)">Ordre en attente (${up ? "call" : "short"})</div>
+      <div class="kv"><div>Signal du</div><div>${fmtDate(o.signal_date)}</div><div>Déclenchement</div><div><b>${NF(o.trigger)}</b></div>
+      <div>Stop</div><div class="ko">${NF(o.stop)}</div><div>Validité restante</div><div>${o.sessions_left} séance(s)</div></div>`;
+  } else {
+    h += `<div class="big muted">Aucun signal ce soir</div><p class="muted">Les conditions du setup ne sont pas toutes réunies (détail ci-dessous).</p>`;
+  }
+  if (C && C.model_position) {
+    const p = C.model_position;
+    h += `<div class="note" style="margin-top:10px">Position du modèle en cours : <b>${p.side === "long" ? "call" : "short"}</b> depuis le ${fmtDate(p.entry_date)} à ${NF(p.entry)} · stop initial ${NF(p.stop_initial)}${p.target ? " · objectif " + NF(p.target) : " · stop suiveur"}.</div>`;
+  }
+  $("#signalCard").innerHTML = h;
+
+  const row = z => `<tr><td>${NF(z.price, 0)}</td><td>${NF(z.low, 0)} – ${NF(z.high, 0)}</td><td>${z.touches}</td><td>${SGN(z.dist_pts, 0)}</td><td>${SGN(z.dist_atr, 1)}</td><td>${fmtDate(z.last)}</td></tr>`;
+  const head = `<tr><th>Niveau</th><th>Zone</th><th>Touches</th><th>Écart (pts)</th><th>Écart (ATR)</th><th>Dernier contact</th></tr>`;
+  $("#levelsCard").innerHTML = `<h2>Niveaux clés (anciens points hauts/bas, 2 ans)</h2>
+    <h3 style="color:var(--res)">Résistances</h3><table>${head}${D.levels.resistances.slice().reverse().map(row).join("")}</table>
+    <h3 style="color:var(--sup)">Supports</h3><table>${head}${D.levels.supports.map(row).join("")}</table>`;
+
+  if (C) {
+    const ck = c => c.ok ? `<span class="ok">✓</span>` : `<span class="ko">✗</span>`;
+    const block = (side, title) => {
+      const c = C.conditions[side];
+      let r = `<h3>${title} ${c.signal ? `<span class="pill ${side === "long" ? "p-up" : "p-down"}">SIGNAL</span>` : ""}</h3><table>`;
+      r += `<tr><td class="l">${ck(c.exces)} Excès</td><td>${NF(c.exces.valeur)} ATR</td><td class="muted">seuil ≥ ${NF(c.exces.seuil, 1)}</td></tr>`;
+      r += `<tr><td class="l">${ck(c.niveau)} Niveau clé</td><td>${c.niveau.touches} point(s) à ±${NF(c.niveau.seuil, 1)} ATR</td><td class="muted">plus proche : ${NF(c.niveau.niveau, 0)} (${NF(c.niveau.valeur)} ATR) · min ${c.niveau.touches_min}</td></tr>`;
+      r += c.rejet.actif ? `<tr><td class="l">${ck(c.rejet)} Bougie de rejet</td><td>${c.rejet.constate ? "oui" : "non"}</td><td class="muted">exigée</td></tr>` : `<tr><td class="l na">– Bougie de rejet</td><td class="na">${c.rejet.constate ? "oui" : "non"}</td><td class="muted">non exigée</td></tr>`;
+      r += c.rsi.actif ? `<tr><td class="l">${ck(c.rsi)} RSI(14)</td><td>${NF(c.rsi.valeur, 1)}</td><td class="muted">${side === "long" ? "≤ 35" : "≥ 65"} sur 3 séances</td></tr>` : `<tr><td class="l na">– RSI(14)</td><td class="na">${NF(c.rsi.valeur, 1)}</td><td class="muted">non exigé</td></tr>`;
+      r += c.tendance.actif ? `<tr><td class="l">${ck(c.tendance)} Tendance (SMA 200)</td><td>${NF(c.tendance.sma200)}</td><td class="muted">${side === "long" ? "cours au-dessus" : "cours en dessous"}</td></tr>` : `<tr><td class="l na">– Tendance (SMA 200)</td><td class="na">${NF(c.tendance.sma200)}</td><td class="muted">non exigée</td></tr>`;
+      return r + `</table>`;
+    };
+    $("#condCard").innerHTML = `<h2>Conditions à la clôture</h2>${block("long", "Rebond haussier (call)")}${block("short", "Retournement baissier (short)")}`;
+    const ts = C.train_stats, ps = C.param_stability;
+    const PN = {ext: "Excès minimal (ATR)", tol: "Tolérance autour du niveau (ATR)", touches: "Points min. sur le niveau", confirm: "Bougie de rejet", rsi: "Filtre RSI", trend: "Filtre tendance SMA 200", stopbuf: "Marge du stop (ATR)", exit: "Sortie"};
+    const PV = v => ({"False": "non", "True": "oui", "rejet": "exigée", "aucun": "non", "avec": "oui", "trail": "suiveur"}[v] || v.replace(".", ","));
+    const stab = Object.entries(ps).map(([k, v]) => `<tr><td class="l">${PN[k] || k}</td><td class="l">${Object.entries(v).map(([a, n]) => `${PV(a)} : <b>${n}</b>`).join(" · ")}</td></tr>`).join("");
+    $("#cfgCard").innerHTML = `<h2>Configuration utilisée</h2>
+      <p>${esc(C.label)}</p>
+      <p class="muted small">Choisie sur les données depuis le ${fmtDate(C.train_from)} : ${ts.n} trades, réussite ${PCT(ts.win_rate, 0)}, espérance ${SGN(ts.expectancy)} R. Ces chiffres sont <b>dans l'échantillon</b> (optimistes par construction) ; la performance crédible est dans l'onglet « Performance hors échantillon ».</p>
+      <h3>Stabilité des choix (nombre de fenêtres walk-forward où chaque valeur a été retenue)</h3>
+      <table>${stab}</table>`;
+  } else { $("#condCard").innerHTML = ""; $("#cfgCard").innerHTML = ""; }
+}
+
+/* ---------- GRAPHIQUE ---------- */
+function mkChart(el, h) {
+  return LightweightCharts.createChart(el, {
+    height: h, width: el.clientWidth,
+    layout: {background: {type: "solid", color: "#171c23"}, textColor: "#a9b3c1", fontFamily: "Segoe UI, system-ui, sans-serif"},
+    grid: {vertLines: {color: "#202733"}, horzLines: {color: "#202733"}},
+    rightPriceScale: {borderColor: "#2a323d"}, timeScale: {borderColor: "#2a323d"},
+    crosshair: {mode: 0},
+    localization: {locale: "fr-BE", priceFormatter: p => NF(p)},
+  });
+}
+function renderChart() {
+  const el = $("#chart");
+  if (!chart) {
+    chart = mkChart(el, 560);
+    candle = chart.addCandlestickSeries({upColor: "#22ab94", downColor: "#f23645", borderVisible: false, wickUpColor: "#22ab94", wickDownColor: "#f23645"});
+    smaS = chart.addLineSeries({color: "#9aa4b2", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false});
+    zzS = chart.addLineSeries({color: "#c9a227", lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false});
+    new ResizeObserver(() => chart.applyOptions({width: el.clientWidth})).observe(el);
+    document.querySelectorAll("[data-r]").forEach(b => b.onclick = () => setRange(+b.dataset.r));
+    $("#cbLevels").onchange = drawOverlays; $("#cbTrades").onchange = drawOverlays; $("#cbSma").onchange = drawOverlays; $("#selZz").onchange = drawOverlays;
+  }
+  candle.setData(D.ohlc.map(r => ({time: r[0], open: r[1], high: r[2], low: r[3], close: r[4]})));
+  const sel = $("#selZz"); sel.innerHTML = `<option value="">aucun</option>` + D.zigzag.map((z, i) => `<option value="${i}">${NF(z.threshold, 0)} %</option>`).join("");
+  drawOverlays(); chart._ranged = false;
+  if ($("#chart").clientWidth > 0) { setRange(252); chart._ranged = true; }
+}
+function setRange(n) {
+  const N = D.ohlc.length;
+  if (!n || n >= N) { chart.timeScale().fitContent(); return; }
+  chart.timeScale().setVisibleLogicalRange({from: N - n, to: N + 5});
+}
+function drawOverlays() {
+  levelLines.forEach(l => candle.removePriceLine(l)); levelLines = [];
+  smaS.setData($("#cbSma").checked ? D.sma200.map(r => ({time: r[0], value: r[1]})) : []);
+  const zi = $("#selZz").value;
+  zzS.setData(zi === "" ? [] : D.zigzag[+zi].pivots.map(p => ({time: p[0], value: p[2]})));
+  if ($("#cbLevels").checked) {
+    D.levels.supports.forEach(z => levelLines.push(candle.createPriceLine({price: z.price, color: "#4c8dff", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `S ${z.touches}x`})));
+    D.levels.resistances.forEach(z => levelLines.push(candle.createPriceLine({price: z.price, color: "#ff9f43", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `R ${z.touches}x`})));
+    const o = D.current && D.current.new_order;
+    if (o) {
+      levelLines.push(candle.createPriceLine({price: o.trigger, color: "#e6eaf0", lineWidth: 2, lineStyle: 0, title: "Déclenchement"}));
+      levelLines.push(candle.createPriceLine({price: o.stop, color: "#f23645", lineWidth: 2, lineStyle: 0, title: "Stop"}));
+      levelLines.push(candle.createPriceLine({price: o.target_2R, color: "#22ab94", lineWidth: 1, lineStyle: 0, title: "2R"}));
+    }
+  }
+  let mk = [];
+  if ($("#cbTrades").checked) {
+    D.oos_trades.forEach(t => {
+      const up = t.side === "long";
+      mk.push({time: t.in, position: up ? "belowBar" : "aboveBar", color: up ? "#22ab94" : "#f23645", shape: up ? "arrowUp" : "arrowDown", text: up ? "C" : "S"});
+      mk.push({time: t.out, position: up ? "aboveBar" : "belowBar", color: t.R > 0 ? "#22ab94" : "#f23645", shape: "circle", text: SGN(t.R, 1) + "R"});
+    });
+  }
+  mk.sort((a, b) => a.time < b.time ? -1 : a.time > b.time ? 1 : 0);
+  candle.setMarkers(mk);
+}
+
+/* ---------- PERFORMANCE ---------- */
+function renderPerf() {
+  const s = D.oos_stats, bs = D.oos_by_side;
+  if (!s.n) { $("#perfTiles").innerHTML = `<div class="card">Aucun trade hors échantillon.</div>`; return; }
+  const tile = (l, v, sub) => `<div class="card tile"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${sub || ""}</div></div>`;
+  const first = D.oos_trades.length ? fmtDate(D.oos_trades[0].in) : "";
+  $("#perfTiles").innerHTML =
+    tile("Trades hors échantillon", s.n, `${s.n_long} call · ${s.n_short} short · depuis ${first}`) +
+    tile("Taux de réussite", PCT(s.win_rate, 0), `gain moyen ${SGN(s.avg_win)} R · perte moyenne ${SGN(s.avg_loss)} R`) +
+    tile("Espérance par trade", SGN(s.expectancy) + " R", `total ${SGN(s.total_R, 1)} R · t = ${NF(s.t_stat)} · hors frais`) +
+    tile("Pire baisse (drawdown)", NF(s.max_dd_R, 1) + " R", `profit factor ${NF(s.profit_factor)} · durée moy. ${NF(s.avg_bars, 0)} séances`);
+
+  const el = $("#equity");
+  if (!eqChart) { eqChart = mkChart(el, 300); eqChart.eqS = eqChart.addLineSeries({color: "#5aa9ff", lineWidth: 2, priceLineVisible: false}); new ResizeObserver(() => eqChart.applyOptions({width: el.clientWidth})).observe(el); }
+  const seen = {}; const eq = [];
+  D.oos_equity.forEach(([d, v]) => { if (seen[d] !== undefined) eq[seen[d]].value = v; else { seen[d] = eq.length; eq.push({time: d, value: v}); } });
+  eqChart.eqS.setData(eq); eqChart.timeScale().fitContent();
+
+  const b = D.random_benchmark;
+  const side = (n, x) => x.n ? `<tr><td class="l">${n}</td><td>${x.n}</td><td>${PCT(x.win_rate, 0)}</td><td>${SGN(x.expectancy)} R</td><td>${SGN(x.total_R, 1)} R</td></tr>` : `<tr><td class="l">${n}</td><td>0</td><td colspan="3" class="na">—</td></tr>`;
+  let verdict = "";
+  if (b) {
+    const p = b.share_random_better;
+    verdict = p <= 0.05 ? `<div class="note">Moins de ${PCT(Math.max(p, 0.001), 1)} des tirages aléatoires font aussi bien : l'avantage du signal ressort nettement du hasard sur cet historique.</div>`
+      : p <= 0.2 ? `<div class="warnbox">${PCT(p, 0)} des tirages aléatoires font aussi bien ou mieux : avantage possible mais non démontré statistiquement.</div>`
+      : `<div class="errbox">${PCT(p, 0)} des tirages aléatoires font aussi bien ou mieux : le signal ne se distingue pas du hasard sur cet historique.</div>`;
+  }
+  $("#benchCard").innerHTML = `<h2>Le signal fait-il mieux que le hasard ?</h2>
+    ${b ? `<table><tr><th>Mesure</th><th>Espérance (R/trade)</th></tr>
+      <tr><td class="l">Système (hors échantillon)</td><td><b>${SGN(b.actual_mean, 3)}</b></td></tr>
+      <tr><td class="l">Entrées aléatoires — moyenne (${b.runs} tirages)</td><td>${SGN(b.random_mean, 3)}</td></tr>
+      <tr><td class="l">Entrées aléatoires — 5e / 95e percentile</td><td>${SGN(b.random_p05, 3)} / ${SGN(b.random_p95, 3)}</td></tr></table>${verdict}` : "<p class='muted'>Non calculé.</p>"}
+    <h3>Par sens</h3><table><tr><th>Sens</th><th>Trades</th><th>Réussite</th><th>Espérance</th><th>Total</th></tr>${side("Call", bs.long)}${side("Short", bs.short)}</table>`;
+
+  const lab = c => c === null ? "" : (D.combos[c] ? D.combos[c].label : c);
+  $("#wfTable").innerHTML = `<table><tr><th>Test</th><th>Trades test</th><th>Réussite</th><th>Espérance test</th><th>Espérance apprentissage</th><th class="l">Configuration retenue (apprentissage)</th></tr>` +
+    D.walk_forward.map(w => `<tr><td>${fmtDate(w.test[0])} → ${fmtDate(w.test[1])}</td><td>${w.test_stats.n}</td><td>${w.test_stats.n ? PCT(w.test_stats.win_rate, 0) : "—"}</td>
+      <td class="${(w.test_stats.expectancy || 0) >= 0 ? "ok" : "ko"}">${w.test_stats.n ? SGN(w.test_stats.expectancy) + " R" : "—"}</td>
+      <td>${w.train_stats ? SGN(w.train_stats.expectancy) + " R (" + w.train_stats.n + ")" : "—"}</td><td class="l small">${w.combo === null ? esc(w.note || "") : esc(lab(w.combo))}</td></tr>`).join("") + `</table>`;
+
+  $("#tradesTable").innerHTML = `<table><tr><th>Sens</th><th>Signal</th><th>Entrée</th><th>Prix</th><th>Stop</th><th>Objectif</th><th>Sortie</th><th>Prix</th><th class="l">Motif</th><th>Séances</th><th>R</th></tr>` +
+    D.oos_trades.slice().reverse().map(t => `<tr><td>${t.side === "long" ? "<span class='ok'>Call</span>" : "<span class='ko'>Short</span>"}</td><td>${fmtDate(t.sig)}</td><td>${fmtDate(t.in)}</td><td>${NF(t.entry)}</td><td>${NF(t.stop)}</td><td>${t.target ? NF(t.target) : "suiveur"}</td><td>${fmtDate(t.out)}</td><td>${NF(t.exit)}</td><td class="l">${t.why}</td><td>${t.bars}</td><td class="${t.R > 0 ? "ok" : "ko"}">${SGN(t.R)}</td></tr>`).join("") + `</table>`;
+}
+
+/* ---------- RECHERCHE ---------- */
+function renderResearch() {
+  $("#researchBox").innerHTML = D.zigzag.map(z => {
+    const tbl = (rows, title) => `<h3>${title}</h3><table><tr><th>Conditions réunies</th><th>Séances</th><th>Probabilité d'un pivot à ±2 séances</th></tr>` +
+      rows.map(r => `<tr><td>${r.cond}</td><td>${r.days}</td><td>${r.p_pivot === null ? "—" : PCT(r.p_pivot, 1)}</td></tr>`).join("") + `</table>`;
+    return `<div class="card" style="margin-bottom:14px"><h2>Retournements ZigZag ≥ ${NF(z.threshold, 0)} %</h2>
+      <div class="kv" style="margin-bottom:8px">
+        <div>Pivots identifiés</div><div>${z.n_pivots} (${NF(z.per_year, 1)} par an)</div>
+        <div>Amplitude médiane d'un mouvement</div><div>${NF(z.median_amplitude_pct, 1)} %</div>
+        <div>Durée médiane d'un mouvement</div><div>${NF(z.median_duration_bars, 0)} séances</div>
+        ${z.signal_precision !== undefined ? `<div>Signaux hors échantillon tombés à ±3 séances d'un pivot</div><div>${PCT(z.signal_precision, 0)}</div>
+        <div>Pivots (période de test) captés par un signal</div><div>${PCT(z.pivot_recall, 0)}</div>` : ""}
+      </div>
+      <div class="grid g2">${"<div>" + tbl(z.table_long, "Creux (rebond haussier)") + "</div><div>" + tbl(z.table_short, "Sommets (retournement baissier)") + "</div>"}</div></div>`;
+  }).join("");
+}
+
+/* ---------- TURBO ---------- */
+const TB = ["side","cap","riskpct","entry","stop","target","strike","barrier","parity","price","fee","tob","atr"];
+TB.forEach(k => { const v = store.get("tb_" + k, null); if (v !== null && !["entry","stop","target","atr"].includes(k)) $("#tb_" + k).value = v; });
+document.querySelectorAll("#turboForm input, #turboForm select").forEach(el => el.addEventListener("input", () => {
+  const k = el.id.slice(3); if (!["entry","stop","target","atr"].includes(k)) store.set("tb_" + k, el.value); calcTurbo();
+}));
+$("#btnUseSignal").onclick = () => fillTurboFromSignal(true);
+function fillTurboFromSignal(manual) {
+  if (!D) return;
+  $("#tb_atr").value = D.last.atr;
+  const C = D.current, o = C && (C.new_order || C.pending_order);
+  if (o) {
+    $("#tb_side").value = o.side; $("#tb_entry").value = o.trigger; $("#tb_stop").value = o.stop;
+    const risk = Math.abs(o.trigger - o.stop);
+    $("#tb_target").value = (o.target_2R !== undefined ? o.target_2R : +(o.trigger + (o.side === "long" ? 2 : -2) * risk).toFixed(2));
+    $("#useSignalInfo").textContent = `Signal ${o.side === "long" ? "call" : "short"} du ${fmtDate(o.signal_date || D.last.date)} repris (objectif 2R).`;
+  } else if (manual) {
+    $("#useSignalInfo").textContent = "Aucun signal ni ordre en attente ce soir : saisissez vos niveaux.";
+  }
+  calcTurbo();
+}
+function calcTurbo() {
+  const g = k => { const v = parseFloat($("#tb_" + k).value); return isFinite(v) ? v : null; };
+  const side = $("#tb_side").value, up = side === "long", sg = up ? 1 : -1;
+  const cap = g("cap"), rp = g("riskpct"), E = g("entry"), St = g("stop"), T = g("target"), K = g("strike"), B = g("barrier"), P = g("parity"),
+        px = g("price"), fee = g("fee") || 0, tob = (g("tob") || 0) / 100, atr = g("atr");
+  const out = $("#turboOut");
+  const errs = [], warns = [];
+  if (E === null || St === null || cap === null || rp === null || P === null || P <= 0) { out.innerHTML = `<p class="muted">Renseignez au minimum capital, risque, entrée, stop et parité.</p>`; return; }
+  if (sg * (E - St) <= 0) errs.push(up ? "Pour un call, le stop doit être sous le niveau d'entrée." : "Pour un short, le stop doit être au-dessus du niveau d'entrée.");
+  if (K === null || B === null) warns.push("Renseignez le strike et la barrière du turbo pour vérifier le risque de désactivation.");
+  if (B !== null && sg * (St - B) <= 0) errs.push(`La barrière (${NF(B)}) serait atteinte <b>avant</b> votre stop (${NF(St)}) : le turbo serait désactivé avant que le stop ne joue → choisissez un turbo dont la barrière est ${up ? "sous" : "au-dessus de"} ${NF(St)}.`);
+  if (K !== null && sg * (E - K) <= 0) errs.push("Le strike doit être " + (up ? "sous" : "au-dessus de") + " le niveau d'entrée.");
+  const intrinsic = K === null ? null : sg * (E - K) / P;
+  const buy = px !== null ? px : intrinsic;
+  const riskPer = Math.abs(E - St) / P;               // € perdus par turbo si le stop est exécuté au prix du stop
+  const budget = cap * rp / 100;
+  let qty = 0, fees = 0;
+  if (riskPer > 0) {
+    // frais aller-retour : 2 courtages + TOB sur l'achat et sur la vente (vente estimée au stop)
+    const sellAtStop = buy === null ? 0 : Math.max(buy - riskPer, 0);
+    for (let q = Math.floor(budget / riskPer); q >= 0; q--) {
+      fees = 2 * fee + tob * q * ((buy || 0) + sellAtStop);
+      if (q * riskPer + fees <= budget) { qty = q; break; }
+    }
+  }
+  const val = buy === null ? null : qty * buy;
+  const lossStop = qty * riskPer + fees;
+  const gainT = T === null ? null : qty * sg * (T - E) / P - (2 * fee + tob * qty * ((buy || 0) + (buy === null ? 0 : buy + sg * (T - E) / P)));
+  const rr = (T === null) ? null : sg * (T - E) / Math.abs(E - St);
+  const lev = (buy && buy > 0) ? (E / P) / buy : null;
+  const stopB = B === null ? null : Math.abs(St - B);
+  if (stopB !== null && atr && sg * (St - B) > 0 && stopB < 0.5 * atr) warns.push(`La barrière n'est qu'à ${NF(stopB)} pts (${NF(stopB / atr)} ATR) au-delà du stop : un gap d'ouverture pourrait désactiver le turbo avant l'exécution du stop.`);
+  if (px !== null && intrinsic !== null && px < intrinsic) warns.push("Le prix saisi est inférieur à la valeur intrinsèque calculée : vérifiez le strike, la parité ou le prix.");
+  if (val !== null && val > cap) errs.push("La valeur de la position dépasse le capital.");
+  out.innerHTML =
+    errs.map(e => `<div class="errbox" style="margin-bottom:8px">${e}</div>`).join("") +
+    warns.map(w => `<div class="warnbox" style="margin-bottom:8px">${w}</div>`).join("") +
+    `<div class="grid g4">
+      <div class="card tile"><div class="l">Nombre de turbos</div><div class="v">${qty.toLocaleString("fr-BE")}</div><div class="s">risque visé ${NF(budget)} € (${NF(rp, 2)} %)</div></div>
+      <div class="card tile"><div class="l">Montant investi</div><div class="v">${val === null ? "—" : NF(val) + " €"}</div><div class="s">${buy === null ? "prix inconnu" : (px !== null ? "au prix saisi " : "à la valeur intrinsèque ") + NF(buy, 3) + " €"}${val !== null && cap ? " · " + NF(val / cap * 100, 1) + " % du capital" : ""}</div></div>
+      <div class="card tile"><div class="l">Perte si stop exécuté</div><div class="v ko">${NF(lossStop)} €</div><div class="s">${NF(Math.abs(E - St))} pts${atr ? " = " + NF(Math.abs(E - St) / atr) + " ATR" : ""} · frais inclus</div></div>
+      <div class="card tile"><div class="l">Gain à l'objectif</div><div class="v ok">${gainT === null ? "—" : NF(gainT) + " €"}</div><div class="s">${rr === null ? "" : "ratio gain/risque " + NF(rr, 1) + " : 1 (indice)"}</div></div>
+    </div>
+    <div class="grid g3" style="margin-top:12px">
+      <div class="card"><div class="kv">
+        <div>Variation par point de CAC</div><div>${NF(1 / P, 4)} € par turbo · ${NF(qty / P, 2)} € pour la position</div>
+        <div>Levier approximatif</div><div>${lev === null ? "—" : "× " + NF(lev, 1)}</div>
+        <div>Prime au-delà de l'intrinsèque</div><div>${px !== null && intrinsic !== null ? NF(px - intrinsic, 3) + " € / turbo" : "—"}</div>
+      </div></div>
+      <div class="card"><div class="kv">
+        <div>Distance entrée → barrière</div><div>${B === null ? "—" : NF(Math.abs(E - B)) + " pts" + (atr ? " (" + NF(Math.abs(E - B) / atr) + " ATR)" : "")}</div>
+        <div>Distance stop → barrière</div><div>${stopB === null ? "—" : (sg * (St - B) > 0 ? "" : "−") + NF(stopB) + " pts" + (atr ? " (" + NF(stopB / atr) + " ATR)" : "")}</div>
+        <div>Perte maximale (barrière touchée)</div><div class="ko">${val === null ? "—" : NF(val + 2 * fee) + " €"}</div>
+      </div></div>
+      <div class="card"><div class="kv">
+        <div>Frais aller-retour estimés</div><div>${NF(fees)} €</div>
+        <div>Seuil de rentabilité (indice)</div><div>${qty > 0 ? NF(E + sg * fees * P / qty) : "—"}</div>
+        <div>Barrière ${up ? "maximale" : "minimale"} compatible</div><div>${atr ? NF(St - sg * 0.5 * atr) + " (stop " + (up ? "−" : "+") + " 0,5 ATR)" : "—"}</div>
+      </div></div>
+    </div>`;
+}
+
+/* ---------- démarrage ---------- */
+(function init() {
+  const cached = store.get("cache", null);
+  if (cached) load(cached, "cache local");
+  else $("#empty").style.display = "block";
+  if (S().owner) refresh();
+})();
+</script>
+</body>
+</html>
