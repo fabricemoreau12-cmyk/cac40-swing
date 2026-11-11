@@ -1,33 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-CAC 40 Swing — moteur d'analyse des retournements sur niveaux clés.
+CAC 40 Swing — V2 : rebonds après excès de baisse (achats) / replis après excès de hausse en
+tendance baissière (ventes), évalués séparément et sans complaisance.
 
-Principe
---------
-1. Historique journalier du CAC 40 (Yahoo Finance, ticker ^FCHI, ou CSV).
-2. Niveaux clés = anciens points hauts/bas "fractals" (k séances de part et
-   d'autre), connus uniquement après confirmation (pas de regard vers le futur).
-3. Setup de retournement évalué à la clôture de chaque séance :
-     - EXCÈS   : le cours a parcouru au moins E x ATR(14) depuis l'extrême des 15 dernières séances ;
-     - NIVEAU  : l'extrême des 3 dernières séances touche un niveau clé (à tol x ATR près) ;
-     - REJET   : (option) clôture dans la moitié favorable de la bougie et au-delà de la clôture précédente ;
-     - FILTRES : (options) RSI(14) en excès, sens de la tendance de fond (SMA 200).
-   Entrée : ordre stop au-delà de l'extrême de la bougie signal (+/- 0,1 ATR), valable 3 séances.
-   Stop   : au-delà de l'extrême des 5 dernières séances +/- b x ATR (niveau d'invalidation).
-   Sortie : objectif 2R, 3R, ou stop suiveur (break-even à +1R puis 3 ATR sous le plus haut de clôture).
-            Sortie forcée après 40 séances.
-4. Recherche des paramètres en walk-forward : optimisation sur 8 ans, test sur les
-   2 années suivantes jamais vues, fenêtre glissante. Seuls les résultats des
-   périodes de test (hors échantillon) sont présentés comme performance.
-5. Contrôle : comparaison avec des entrées aléatoires (mêmes stops/sorties).
-6. Description des retournements passés (ZigZag 3 %, 5 %, 8 %) — ce ZigZag
-   utilise le futur et ne sert QUE de description / d'étiquetage, jamais de signal.
+Ce qui change par rapport à la V1 (conclusions des données 1990-2026) :
+  - les niveaux clés (anciens points hauts/bas) n'amélioraient pas la détection des retournements :
+    ils sont affichés à titre d'information mais ne conditionnent plus le signal ;
+  - le RSI en excès améliorait la détection des creux : il devient un paramètre central ;
+  - les ventes étaient perdantes : elles ne sont testées qu'en tendance baissière (cours < SMA 200)
+    et chaque sens a son propre walk-forward, son propre contrôle par le hasard et son propre statut ;
+  - un coût par trade (en points d'indice) est intégré au choix des paramètres ;
+  - les règles sont GELÉES au premier lancement de la V2 (data/frozen_v2.json) : les signaux
+    envoyés viennent de ces règles figées, et les trades postérieurs au gel forment un suivi
+    "à blanc" qui sera la seule vraie preuve (données jamais vues lors de la conception).
 
-Les résultats sont exprimés en R (multiple du risque initial), hors frais,
-spread et financement des turbos, sauf si COST_POINTS est renseigné.
+Règle d'activation (fixée à l'avance) : un sens n'émet de signal que si, hors échantillon et
+frais inclus, son espérance est > 0 ET au plus 10 % des tirages aléatoires font aussi bien.
 
-Ce programme est un outil d'aide à la décision, pas un conseil en investissement.
+Outil d'aide à la décision, pas un conseil en investissement.
 """
 from __future__ import annotations
 
@@ -47,54 +38,71 @@ from email.mime.text import MIMEText
 import numpy as np
 import pandas as pd
 
-# --------------------------------------------------------------------------
-# Configuration
-# --------------------------------------------------------------------------
+VERSION = 2
+
 CFG = {
     "ticker": "^FCHI",
     "atr_n": 14,
     "rsi_n": 14,
     "sma_n": 200,
-    "fractal_k": 5,          # un point haut/bas = extrême sur k séances de chaque côté
+    "fractal_k": 5,          # niveaux clés (information) : extrême sur k séances de chaque côté
     "level_lookback": 500,   # ancienneté max d'un niveau clé (séances, ~2 ans)
     "ext_lookback": 15,      # fenêtre de mesure de l'excès (séances)
-    "touch_window": 3,       # l'extrême des 3 dernières séances doit toucher le niveau
+    "touch_window": 3,       # l'extrême / le RSI sont mesurés sur les 3 dernières séances
     "trigger_atr": 0.10,     # déclenchement = extrême de la bougie signal +/- 0,1 ATR
     "order_valid": 3,        # validité de l'ordre stop (séances)
     "stop_lookback": 5,      # stop au-delà de l'extrême des 5 dernières séances
     "max_bars": 40,          # sortie forcée (séances)
     "trail_atr": 3.0,        # stop suiveur (mode "trail")
-    "rsi_low": 35,
-    "rsi_high": 65,
     "train_years": 8,
     "test_years": 2,
-    "min_train_trades": 20,
+    "min_train_trades": 15,
     "random_runs": 300,
     "zigzag_thresholds": [3.0, 5.0, 8.0],
-    "COST_POINTS": 0.0,      # coût aller-retour estimé en points d'indice (0 = hors frais)
+    # Coût aller-retour supposé, en points d'indice (spread + frais + financement d'un turbo).
+    # HYPOTHÈSE à remplacer par votre coût réel : il est déduit de chaque trade (R - coût / risque).
+    "COST_POINTS": 3.0,
+    "cost_sensitivity": [0.0, 3.0, 6.0, 10.0],
+    "activation_max_random_share": 0.10,
+    "frozen_file": "data/frozen_v2.json",
 }
 
 GRID = {
-    "ext": [2.5, 3.5, 4.5],
-    "tol": [0.5, 1.0],
-    "touches": [1, 2],
-    "confirm": ["rejet", "aucun"],
-    "rsi": [False, True],
-    "trend": ["aucun", "avec"],
-    "stopbuf": [0.25, 0.75],
-    "exit": ["2R", "3R", "trail"],
+    "long": {
+        "ext": [2.5, 3.5, 4.5],
+        "rsi": [30, 35, 40, None],     # RSI(14) min des 3 dernières séances <= seuil (None = pas de filtre)
+        "confirm": ["rejet", "aucun"],
+        "trend": ["aucun", "avec"],    # "avec" = achat seulement au-dessus de la SMA 200
+        "stopbuf": [0.25, 0.75],
+        "exit": ["2R", "3R", "trail"],
+    },
+    "short": {
+        "ext": [2.5, 3.5, 4.5],
+        "rsi": [70, 65, 60, None],     # RSI(14) max des 3 dernières séances >= seuil
+        "confirm": ["rejet", "aucun"],
+        "trend": ["avec"],             # vente seulement sous la SMA 200 (imposé)
+        "stopbuf": [0.25, 0.75],
+        "exit": ["2R", "3R", "trail"],
+    },
 }
 
 
-def combos():
-    keys = list(GRID)
-    for vals in itertools.product(*[GRID[k] for k in keys]):
-        yield dict(zip(keys, vals))
+def combos(side):
+    g = GRID[side]
+    keys = list(g)
+    for vals in itertools.product(*[g[k] for k in keys]):
+        p = dict(zip(keys, vals))
+        p["side"] = side
+        yield p
 
 
 def combo_label(p):
-    return (f"excès≥{p['ext']} ATR | niveau ±{p['tol']} ATR ({p['touches']}+ point(s)) | rejet:{'oui' if p['confirm']=='rejet' else 'non'} | "
-            f"RSI:{'oui' if p['rsi'] else 'non'} | tendance:{p['trend']} | stop +{p['stopbuf']} ATR | sortie:{p['exit']}")
+    up = p["side"] == "long"
+    rsi = "non" if p["rsi"] is None else (f"≤ {p['rsi']}" if up else f"≥ {p['rsi']}")
+    tr = "non" if p["trend"] == "aucun" else ("cours > SMA 200" if up else "cours < SMA 200")
+    ex = "stop suiveur" if p["exit"] == "trail" else "objectif " + p["exit"]
+    return (f"{'Achat' if up else 'Vente'} | excès ≥ {p['ext']} ATR | RSI {rsi} | rejet : {'oui' if p['confirm']=='rejet' else 'non'} | "
+            f"tendance : {tr} | stop +{p['stopbuf']} ATR | {ex}")
 
 
 # --------------------------------------------------------------------------
@@ -111,6 +119,17 @@ def load_yahoo(ticker: str) -> pd.DataFrame:
         idx = idx.tz_localize(None)
     df.index = idx.normalize()
     return df
+
+
+def drop_unfinished_bar(df: pd.DataFrame):
+    """Retire la séance du jour si la bourse de Paris n'est pas encore clôturée
+    (Euronext Paris : clôture 17:30, marge jusqu'à 17:45 heure de Paris).
+    Sans cela, un lancement en journée analyserait une bougie incomplète."""
+    from zoneinfo import ZoneInfo
+    now = dt.datetime.now(ZoneInfo("Europe/Paris"))
+    if len(df) and df.index[-1].date() == now.date() and now.time() < dt.time(17, 45):
+        return df.iloc[:-1], True
+    return df, False
 
 
 def load_csv(path: str) -> pd.DataFrame:
@@ -142,6 +161,9 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
 
 # --------------------------------------------------------------------------
 # Indicateurs
+# --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Indicateurs et niveaux clés (sans regard vers le futur)
 # --------------------------------------------------------------------------
 def wilder(s: pd.Series, n: int) -> pd.Series:
     return s.ewm(alpha=1.0 / n, adjust=False).mean()
@@ -188,7 +210,7 @@ def level_distances(df: pd.DataFrame, pts):
     d_short = np.full(n, np.inf)
     lvl_long = np.full(n, np.nan)
     lvl_short = np.full(n, np.nan)
-    tols = sorted(set(GRID["tol"]))
+    tols = [0.5, 1.0]  # tolérances utilisées pour la recherche descriptive
     cnt_long = {tl: np.zeros(n, dtype=int) for tl in tols}
     cnt_short = {tl: np.zeros(n, dtype=int) for tl in tols}
     p_ptr = 0
@@ -252,6 +274,9 @@ def level_zones(df: pd.DataFrame, pts, t: int, tol_atr: float = 0.5):
 # --------------------------------------------------------------------------
 # Signaux
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Variables de décision
+# --------------------------------------------------------------------------
 class Features:
     def __init__(self, df: pd.DataFrame):
         self.df = df
@@ -268,17 +293,15 @@ class Features:
         ll = df["low"].rolling(L).min().values
         lo3 = df["low"].rolling(tw).min().values
         hi3 = df["high"].rolling(tw).max().values
-        self.ext_long = (hh - lo3) / self.atr      # baisse parcourue avant un rebond
-        self.ext_short = (hi3 - ll) / self.atr     # hausse parcourue avant un repli
+        self.ext_long = (hh - lo3) / self.atr      # baisse parcourue (en ATR) avant un rebond
+        self.ext_short = (hi3 - ll) / self.atr     # hausse parcourue (en ATR) avant un repli
         rng = self.h - self.l
         pos = np.where(rng > 0, (self.c - self.l) / np.where(rng > 0, rng, 1), 0.5)
         pc = np.r_[np.nan, self.c[:-1]]
         self.rej_long = (pos >= 0.5) & (self.c > pc)
         self.rej_short = (pos <= 0.5) & (self.c < pc)
-        rsi_min3 = df["rsi"].rolling(tw).min().values
-        rsi_max3 = df["rsi"].rolling(tw).max().values
-        self.rsi_long = rsi_min3 <= CFG["rsi_low"]
-        self.rsi_short = rsi_max3 >= CFG["rsi_high"]
+        self.rsi_min3 = df["rsi"].rolling(tw).min().values
+        self.rsi_max3 = df["rsi"].rolling(tw).max().values
         self.up_trend = self.c > self.sma
         self.dn_trend = self.c < self.sma
         self.pts = fractal_points(self.h, self.l, CFG["fractal_k"])
@@ -288,46 +311,44 @@ class Features:
         sl = CFG["stop_lookback"]
         self.low_n = df["low"].rolling(sl).min().values
         self.high_n = df["high"].rolling(sl).max().values
+        self._zero = np.zeros(n, dtype=bool)
 
-    def conditions(self, p, t):
-        """Détail des conditions à la séance t (pour l'état du jour)."""
-        out = {}
-        for side in ("long", "short"):
-            ext = self.ext_long if side == "long" else self.ext_short
-            dist = self.d_long if side == "long" else self.d_short
-            cnt = (self.cnt_long if side == "long" else self.cnt_short)[p["tol"]]
-            lvl = self.lvl_long if side == "long" else self.lvl_short
-            rej = self.rej_long if side == "long" else self.rej_short
-            rs = self.rsi_long if side == "long" else self.rsi_short
-            tr = self.up_trend if side == "long" else self.dn_trend
-            out[side] = {
-                "exces": {"ok": bool(ext[t] >= p["ext"]), "valeur": round(float(ext[t]), 2), "seuil": p["ext"]},
-                "niveau": {"ok": bool(cnt[t] >= p["touches"]), "valeur": None if not np.isfinite(dist[t]) else round(float(dist[t]), 2),
-                           "seuil": p["tol"], "niveau": None if not np.isfinite(lvl[t]) else round(float(lvl[t]), 2),
-                           "touches": int(cnt[t]), "touches_min": p["touches"]},
-                "rejet": {"ok": bool(rej[t]) if p["confirm"] == "rejet" else True, "actif": p["confirm"] == "rejet", "constate": bool(rej[t])},
-                "rsi": {"ok": bool(rs[t]) if p["rsi"] else True, "actif": bool(p["rsi"]), "valeur": round(float(self.rsi[t]), 1)},
-                "tendance": {"ok": bool(tr[t]) if p["trend"] == "avec" else True, "actif": p["trend"] == "avec",
-                             "sma200": round(float(self.sma[t]), 2)},
-            }
-            out[side]["signal"] = all(v["ok"] for k, v in out[side].items())
-        return out
+    def _rsi_ok(self, side, thr):
+        if thr is None:
+            return np.ones(len(self.c), dtype=bool)
+        return (self.rsi_min3 <= thr) if side == "long" else (self.rsi_max3 >= thr)
 
     def signals(self, p):
-        base = self.valid
-        lg = base & (self.ext_long >= p["ext"]) & (self.cnt_long[p["tol"]] >= p["touches"])
-        sh = base & (self.ext_short >= p["ext"]) & (self.cnt_short[p["tol"]] >= p["touches"])
+        side = p["side"]
+        ext = self.ext_long if side == "long" else self.ext_short
+        m = self.valid & (ext >= p["ext"]) & self._rsi_ok(side, p["rsi"])
         if p["confirm"] == "rejet":
-            lg &= self.rej_long
-            sh &= self.rej_short
-        if p["rsi"]:
-            lg &= self.rsi_long
-            sh &= self.rsi_short
+            m &= self.rej_long if side == "long" else self.rej_short
         if p["trend"] == "avec":
-            lg &= self.up_trend
-            sh &= self.dn_trend
-        both = lg & sh
-        return lg & ~both, sh & ~both
+            m &= self.up_trend if side == "long" else self.dn_trend
+        return (m, self._zero) if side == "long" else (self._zero, m)
+
+    def conditions(self, p, t):
+        side = p["side"]
+        up = side == "long"
+        ext = (self.ext_long if up else self.ext_short)[t]
+        r3 = (self.rsi_min3 if up else self.rsi_max3)[t]
+        rej = bool((self.rej_long if up else self.rej_short)[t])
+        trd = bool((self.up_trend if up else self.dn_trend)[t])
+        cond = {
+            "exces": {"ok": bool(ext >= p["ext"]), "valeur": round(float(ext), 2), "seuil": p["ext"]},
+            "rsi": {"ok": True if p["rsi"] is None else bool(r3 <= p["rsi"] if up else r3 >= p["rsi"]),
+                    "actif": p["rsi"] is not None, "valeur": round(float(r3), 1), "seuil": p["rsi"]},
+            "rejet": {"ok": rej if p["confirm"] == "rejet" else True, "actif": p["confirm"] == "rejet", "constate": rej},
+            "tendance": {"ok": trd if p["trend"] == "avec" else True, "actif": p["trend"] == "avec",
+                         "constate": trd, "sma200": round(float(self.sma[t]), 2)},
+        }
+        cond["signal"] = bool(self.valid[t]) and all(v["ok"] for v in cond.values())
+        lvl = (self.lvl_long if up else self.lvl_short)[t]
+        dist = (self.d_long if up else self.d_short)[t]
+        cond["niveau_info"] = {"niveau": None if not np.isfinite(lvl) else round(float(lvl), 2),
+                               "dist_atr": None if not np.isfinite(dist) else round(float(dist), 2)}
+        return cond
 
 
 # --------------------------------------------------------------------------
@@ -459,6 +480,9 @@ def score(trades):
 # --------------------------------------------------------------------------
 # Walk-forward
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Walk-forward et contrôle par le hasard
+# --------------------------------------------------------------------------
 def walk_forward(F: Features, all_trades):
     dates = F.df.index
     first_valid = dates[np.argmax(F.valid)]
@@ -558,7 +582,7 @@ def random_benchmark(F: Features, oos, wf, params, seed=42):
 
 
 # --------------------------------------------------------------------------
-# ZigZag descriptif (utilise le futur : description uniquement)
+# ZigZag descriptif (utilise le futur : description uniquement, jamais de signal)
 # --------------------------------------------------------------------------
 def zigzag(h, l, pct):
     """Pivots ZigZag : un sommet est validé quand le cours recule de pct % depuis ce sommet,
@@ -592,8 +616,8 @@ def zigzag(h, l, pct):
 def zigzag_research(F: Features, oos):
     h, l = F.h, F.l
     dates = F.df.index
-    out = []
     valid = F.valid
+    out = []
     for pct in CFG["zigzag_thresholds"]:
         piv = [(i, t) for (i, t) in zigzag(h, l, pct) if valid[i]]
         amps, durs = [], []
@@ -602,32 +626,36 @@ def zigzag_research(F: Features, oos):
             pb = h[b[0]] if b[1] == "H" else l[b[0]]
             amps.append(abs(pb / pa - 1) * 100)
             durs.append(b[0] - a[0])
-        # probabilité qu'un pivot ZigZag (du bon sens) se trouve à +/- 2 séances, selon les conditions réunies
         nb = len(h)
         near_L = np.zeros(nb, bool); near_H = np.zeros(nb, bool)
         for i, t in piv:
-            arr = near_L if t == "L" else near_H
-            arr[max(0, i - 2):i + 3] = True
+            (near_L if t == "L" else near_H)[max(0, i - 2):i + 3] = True
+
         def cond_rows(side):
-            near = near_L if side == "long" else near_H
-            ext = F.ext_long if side == "long" else F.ext_short
-            cnt = F.cnt_long if side == "long" else F.cnt_short
-            rej = F.rej_long if side == "long" else F.rej_short
-            rs = F.rsi_long if side == "long" else F.rsi_short
-            rows = []
+            up = side == "long"
+            near = near_L if up else near_H
+            ext = F.ext_long if up else F.ext_short
+            cnt = F.cnt_long if up else F.cnt_short
+            rej = F.rej_long if up else F.rej_short
+            rs = (F.rsi_min3 <= 35) if up else (F.rsi_max3 >= 65)
+            tr = F.up_trend if up else F.dn_trend
+            e = valid & (ext >= 3.5)
             steps = [
                 ("Toutes les séances", valid),
-                ("Excès ≥ 3,5 ATR", valid & (ext >= 3.5)),
-                ("+ niveau clé (±0,5 ATR, 1 point)", valid & (ext >= 3.5) & (cnt[0.5] >= 1)),
-                ("+ niveau clé (±0,5 ATR, 2 points)", valid & (ext >= 3.5) & (cnt[0.5] >= 2)),
-                ("+ bougie de rejet", valid & (ext >= 3.5) & (cnt[0.5] >= 2) & rej),
-                ("+ RSI en excès", valid & (ext >= 3.5) & (cnt[0.5] >= 2) & rej & rs),
-                ("Excès ≥ 3,5 ATR + rejet, SANS niveau", valid & (ext >= 3.5) & (cnt[1.0] == 0) & rej),
+                ("Excès ≥ 3,5 ATR", e),
+                (f"Excès + RSI {'≤ 35' if up else '≥ 65'}", e & rs),
+                (f"Excès + RSI + bougie de rejet", e & rs & rej),
+                (f"Excès + {'cours > SMA 200' if up else 'cours < SMA 200'}", e & tr),
+                ("Excès + niveau clé (±0,5 ATR, 1 point)", e & (cnt[0.5] >= 1)),
+                ("Excès + niveau clé (±0,5 ATR, 2 points)", e & (cnt[0.5] >= 2)),
+                ("Excès SANS niveau clé à ±1 ATR", e & (cnt[1.0] == 0)),
             ]
+            rows = []
             for name, m in steps:
                 k = int(m.sum())
                 rows.append({"cond": name, "days": k, "p_pivot": round(float(near[m].mean()), 3) if k else None})
             return rows
+
         res = {
             "threshold": pct,
             "n_pivots": len(piv),
@@ -638,142 +666,214 @@ def zigzag_research(F: Features, oos):
             "table_short": cond_rows("short"),
             "pivots": [[dates[i].strftime("%Y-%m-%d"), t, round(float(h[i] if t == "H" else l[i]), 2)] for i, t in piv],
         }
-        # précision / rappel des signaux hors échantillon vis-à-vis des pivots
         if oos:
             first = min(x["sig"] for x in oos)
             piv_oos = [(i, t) for i, t in piv if i >= first]
-            tol = 3
-            hit = 0
-            for x in oos:
-                want = "L" if x["side"] == "long" else "H"
-                if any(abs(i - x["sig"]) <= tol and t == want for i, t in piv_oos):
-                    hit += 1
-            caught = 0
-            for i, t in piv_oos:
-                want = "long" if t == "L" else "short"
-                if any(abs(i - x["sig"]) <= tol and x["side"] == want for x in oos):
-                    caught += 1
+            hit = sum(1 for x in oos if any(abs(i - x["sig"]) <= 3 and t == ("L" if x["side"] == "long" else "H") for i, t in piv_oos))
             res["signal_precision"] = round(hit / len(oos), 3)
-            res["pivot_recall"] = round(caught / len(piv_oos), 3) if piv_oos else None
         out.append(res)
     return out
 
 
 # --------------------------------------------------------------------------
-# Programme principal
+# Évaluation d'un sens (achat ou vente)
 # --------------------------------------------------------------------------
-def run(df: pd.DataFrame, source: str):
-    df = add_indicators(clean(df))
-    F = Features(df)
-    params = list(combos())
-    all_trades = []
-    for p in params:
-        trs, _, _ = simulate(F, p)
-        all_trades.append(trs)
-    wf, oos = walk_forward(F, all_trades)
-    oos_stats = stats(oos)
-    bench = random_benchmark(F, oos, wf, params)
+def with_cost(trades, cost):
+    """Recalcule les R avec un autre coût aller-retour (points d'indice)."""
+    out = []
+    for x in trades:
+        y = dict(x)
+        y["R"] = x["R"] + CFG["COST_POINTS"] / x["risk"] - cost / x["risk"]
+        out.append(y)
+    return out
 
-    # configuration actuelle = meilleure sur les 8 dernières années
-    dates = df.index
-    last = dates[-1]
-    a = last - pd.DateOffset(years=CFG["train_years"])
-    cur_best, cur_s = None, -np.inf
+
+def best_recent(F, params, all_trades):
+    dates = F.df.index
+    a = dates[-1] - pd.DateOffset(years=CFG["train_years"])
+    best, best_s = None, -np.inf
     for ci, trs in enumerate(all_trades):
         s = score([x for x in trs if dates[x["in"]] >= a])
-        if s > cur_s:
-            cur_best, cur_s = ci, s
-    current = None
+        if s > best_s:
+            best, best_s = ci, s
+    if best is None or best_s <= 0:
+        return None, a, None
+    return params[best], a, stats([x for x in all_trades[best] if dates[x["in"]] >= a])
+
+
+def evaluate_side(F: Features, side):
+    params = list(combos(side))
+    all_trades = [simulate(F, p)[0] for p in params]
+    wf, oos = walk_forward(F, all_trades)
+    bench = random_benchmark(F, oos, wf, params) if oos else None
+    st = stats(oos)
+    sens = {str(c): stats(with_cost(oos, c)) for c in CFG["cost_sensitivity"]}
+    active = bool(st.get("n", 0) > 0 and st["expectancy"] > 0 and bench is not None
+                  and bench["share_random_better"] <= CFG["activation_max_random_share"])
+    reasons = []
+    if not st.get("n"):
+        reasons.append("aucun trade hors échantillon")
+    else:
+        if st["expectancy"] <= 0:
+            reasons.append(f"espérance hors échantillon ≤ 0 ({st['expectancy']:+.2f} R, coût {CFG['COST_POINTS']} pts inclus)")
+        if bench and bench["share_random_better"] > CFG["activation_max_random_share"]:
+            reasons.append(f"{bench['share_random_better']*100:.0f} % des entrées aléatoires font aussi bien (max {CFG['activation_max_random_share']*100:.0f} %)")
+    recent, recent_from, recent_stats = best_recent(F, params, all_trades)
+    return {
+        "params": params, "all_trades": all_trades, "wf": wf, "oos": oos, "bench": bench, "stats": st,
+        "cost_sensitivity": sens, "active": active, "inactive_reasons": reasons,
+        "recent_best": recent, "recent_from": recent_from, "recent_stats": recent_stats,
+    }
+
+
+def side_today(F: Features, p, t):
+    """État du jour pour des paramètres donnés : conditions, nouvel ordre, ordre en attente, position modèle."""
+    dates = F.df.index
+    cond = F.conditions(p, t)
+    sgn = 1 if p["side"] == "long" else -1
+    order = None
+    if cond["signal"]:
+        trig = F.h[t] + CFG["trigger_atr"] * F.atr[t] if sgn == 1 else F.l[t] - CFG["trigger_atr"] * F.atr[t]
+        stop = (F.low_n[t] - p["stopbuf"] * F.atr[t]) if sgn == 1 else (F.high_n[t] + p["stopbuf"] * F.atr[t])
+        risk = sgn * (trig - stop)
+        order = {"side": p["side"], "trigger": round(float(trig), 2), "stop": round(float(stop), 2), "risk_pts": round(float(risk), 2),
+                 "target_2R": round(float(trig + sgn * 2 * risk), 2), "target_3R": round(float(trig + sgn * 3 * risk), 2),
+                 "exit": p["exit"], "valid_sessions": CFG["order_valid"], "signal_date": dates[t].strftime("%Y-%m-%d")}
+    trades, open_pos, pending = simulate(F, p, keep_open=True)
+    pend = None
+    if pending is not None and order is None and 0 < t - pending["t"] < CFG["order_valid"]:
+        pend = {"side": pending["side"], "trigger": round(pending["trigger"], 2), "stop": round(pending["stop"], 2),
+                "signal_date": dates[pending["t"]].strftime("%Y-%m-%d"), "sessions_left": CFG["order_valid"] - (t - pending["t"])}
+    op = None
+    if open_pos is not None:
+        op = {"side": open_pos["side"], "signal_date": dates[open_pos["sig"]].strftime("%Y-%m-%d"),
+              "entry_date": dates[open_pos["in"]].strftime("%Y-%m-%d"), "entry": round(open_pos["entry"], 2),
+              "stop_initial": round(open_pos["stop"], 2), "target": None if open_pos["target"] is None else round(open_pos["target"], 2)}
+    return {"conditions": cond, "new_order": order, "pending_order": pend, "model_position": op}, trades, open_pos
+
+
+def fmt_tr(x, dates):
+    return {
+        "side": x["side"], "sig": dates[x["sig"]].strftime("%Y-%m-%d"),
+        "in": dates[x["in"]].strftime("%Y-%m-%d"), "entry": round(x["entry"], 2), "stop": round(x["stop"], 2),
+        "target": None if x["target"] is None else round(x["target"], 2),
+        "out": dates[x["out"]].strftime("%Y-%m-%d"), "exit": round(x["exit"], 2), "why": x["why"],
+        "R": round(x["R"], 3), "risk": round(x["risk"], 2), "bars": x["bars"], "combo": x.get("combo"),
+    }
+
+
+# --------------------------------------------------------------------------
+# Programme principal
+# --------------------------------------------------------------------------
+def load_frozen(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            fr = json.load(f)
+        if fr.get("version") == VERSION:
+            return fr
+    except FileNotFoundError:
+        pass
+    return None
+
+
+def run(df: pd.DataFrame, source: str, frozen_path: str | None):
+    df = add_indicators(clean(df))
+    F = Features(df)
+    dates = df.index
     t = len(df) - 1
-    if cur_best is not None and cur_s > 0:
-        p = params[cur_best]
-        _, open_pos, pending = simulate(F, p, keep_open=True)
-        cond = F.conditions(p, t)
-        order = None
-        for side in ("long", "short"):
-            if cond[side]["signal"]:
-                sgn = 1 if side == "long" else -1
-                trig = F.h[t] + CFG["trigger_atr"] * F.atr[t] if sgn == 1 else F.l[t] - CFG["trigger_atr"] * F.atr[t]
-                stop = (F.low_n[t] - p["stopbuf"] * F.atr[t]) if sgn == 1 else (F.high_n[t] + p["stopbuf"] * F.atr[t])
-                risk = sgn * (trig - stop)
-                order = {
-                    "side": side, "trigger": round(float(trig), 2), "stop": round(float(stop), 2), "risk_pts": round(float(risk), 2),
-                    "target_2R": round(float(trig + sgn * 2 * risk), 2), "target_3R": round(float(trig + sgn * 3 * risk), 2),
-                    "valid_sessions": CFG["order_valid"],
-                }
-        pend = None
-        if pending is not None and order is None and t - pending["t"] < CFG["order_valid"]:
-            pend = {k: (round(v, 2) if isinstance(v, float) else v) for k, v in pending.items()}
-            pend["signal_date"] = dates[pending["t"]].strftime("%Y-%m-%d")
-            pend["sessions_left"] = CFG["order_valid"] - (t - pending["t"])
-            del pend["t"]
-        op = None
-        if open_pos is not None:
-            op = {"side": open_pos["side"], "entry_date": dates[open_pos["in"]].strftime("%Y-%m-%d"),
-                  "entry": round(open_pos["entry"], 2), "stop_initial": round(open_pos["stop"], 2),
-                  "target": None if open_pos["target"] is None else round(open_pos["target"], 2)}
-        sel = {}
-        for k in GRID:
-            vals = [params[r["combo"]][k] for r in wf if r["combo"] is not None]
-            sel[k] = {str(v): vals.count(v) for v in GRID[k]}
-        current = {
-            "combo": cur_best, "params": p, "label": combo_label(p),
-            "train_from": a.strftime("%Y-%m-%d"),
-            "train_stats": stats([x for x in all_trades[cur_best] if dates[x["in"]] >= a]),
-            "conditions": cond, "new_order": order, "pending_order": pend, "model_position": op,
-            "param_stability": sel,
+    last = dates[-1]
+
+    ev = {s: evaluate_side(F, s) for s in ("long", "short")}
+
+    # ---- règles gelées
+    frozen = load_frozen(frozen_path) if frozen_path else None
+    created = False
+    if frozen is None:
+        frozen = {"version": VERSION, "frozen_on": last.strftime("%Y-%m-%d"),
+                  "created_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                  "note": "Paramètres figés au premier lancement de la V2 (meilleure combinaison des 8 années précédentes). "
+                          "Supprimer ce fichier pour re-geler (le suivi à blanc repart alors de zéro).",
+                  "long": ev["long"]["recent_best"], "short": ev["short"]["recent_best"]}
+        created = True
+        if frozen_path:
+            os.makedirs(os.path.dirname(os.path.abspath(frozen_path)), exist_ok=True)
+            with open(frozen_path, "w", encoding="utf-8") as f:
+                json.dump(sanitize(frozen), f, ensure_ascii=False, indent=2)
+    fz_date = pd.Timestamp(frozen["frozen_on"])
+
+    sides_out, today, forward_trades, forward_open = {}, {}, [], []
+    for s in ("long", "short"):
+        E = ev[s]
+        p = frozen.get(s)
+        if p is not None:
+            st_today, trs, open_pos = side_today(F, p, t)
+            st_today["emit"] = E["active"]
+            st_today["params"] = p
+            st_today["label"] = combo_label(p)
+            today[s] = st_today
+            forward_trades += [fmt_tr(x, dates) for x in trs if dates[x["sig"]] > fz_date]
+            if open_pos is not None and dates[open_pos["sig"]] > fz_date:
+                forward_open.append(st_today["model_position"])
+        else:
+            today[s] = None
+        eq, cum = [], 0.0
+        for x in sorted(E["oos"], key=lambda x: x["out"]):
+            cum += x["R"]
+            eq.append([dates[x["out"]].strftime("%Y-%m-%d"), round(cum, 3)])
+        used = sorted({r["combo"] for r in E["wf"] if r["combo"] is not None})
+        stab = {}
+        for k in GRID[s]:
+            vals = [E["params"][r["combo"]][k] for r in E["wf"] if r["combo"] is not None]
+            stab[k] = {str(v): vals.count(v) for v in GRID[s][k]}
+        sides_out[s] = {
+            "grid_size": len(E["params"]),
+            "active": E["active"], "inactive_reasons": E["inactive_reasons"],
+            "oos_stats": E["stats"], "cost_sensitivity": E["cost_sensitivity"],
+            "random_benchmark": E["bench"], "walk_forward": E["wf"],
+            "combos": {str(i): {"params": E["params"][i], "label": combo_label(E["params"][i])} for i in used},
+            "param_stability": stab,
+            "oos_trades": [fmt_tr(x, dates) for x in sorted(E["oos"], key=lambda x: x["in"])],
+            "oos_equity": eq,
+            "recent_best": None if E["recent_best"] is None else {"params": E["recent_best"], "label": combo_label(E["recent_best"]),
+                                                                  "from": E["recent_from"].strftime("%Y-%m-%d"), "stats": E["recent_stats"]},
         }
 
+    fwd_sorted = sorted(forward_trades, key=lambda x: x["in"])
     zones = level_zones(df, F.pts, t, 0.5)
     close = float(df["close"].iloc[-1])
+    atr_now = float(df["atr"].iloc[-1])
     sup = sorted([z for z in zones if z["price"] < close], key=lambda z: -z["price"])[:6]
     res = sorted([z for z in zones if z["price"] >= close], key=lambda z: z["price"])[:6]
     for z in sup + res:
         z["dist_pts"] = round(z["price"] - close, 2)
-        z["dist_atr"] = round((z["price"] - close) / float(df["atr"].iloc[-1]), 2)
+        z["dist_atr"] = round((z["price"] - close) / atr_now, 2)
 
-    def fmt_tr(x):
-        return {
-            "side": x["side"], "sig": dates[x["sig"]].strftime("%Y-%m-%d"),
-            "in": dates[x["in"]].strftime("%Y-%m-%d"), "entry": round(x["entry"], 2), "stop": round(x["stop"], 2),
-            "target": None if x["target"] is None else round(x["target"], 2),
-            "out": dates[x["out"]].strftime("%Y-%m-%d"), "exit": round(x["exit"], 2), "why": x["why"],
-            "R": round(x["R"], 3), "bars": x["bars"], "combo": x.get("combo"),
-        }
-
-    eq, cum = [], 0.0
-    for x in sorted(oos, key=lambda x: x["out"]):
-        cum += x["R"]
-        eq.append([dates[x["out"]].strftime("%Y-%m-%d"), round(cum, 3)])
-
-    used = sorted({r["combo"] for r in wf if r["combo"] is not None} | ({cur_best} if cur_best is not None else set()))
-    out = {
+    prev_close = float(df["close"].iloc[-2]) if len(df) > 1 else None
+    return {
+        "version": VERSION,
         "generated_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M"),
         "source": source,
         "ticker": CFG["ticker"],
-        "config": {k: v for k, v in CFG.items()},
-        "grid_size": len(params),
+        "config": CFG,
         "last": {
             "date": last.strftime("%Y-%m-%d"), "open": round(float(df["open"].iloc[-1]), 2),
             "high": round(float(df["high"].iloc[-1]), 2), "low": round(float(df["low"].iloc[-1]), 2),
-            "close": round(close, 2), "atr": round(float(df["atr"].iloc[-1]), 2),
-            "rsi": round(float(df["rsi"].iloc[-1]), 1), "sma200": round(float(df["sma200"].iloc[-1]), 2),
+            "close": round(close, 2), "prev_close": None if prev_close is None else round(prev_close, 2),
+            "atr": round(atr_now, 2), "rsi": round(float(df["rsi"].iloc[-1]), 1), "sma200": round(float(df["sma200"].iloc[-1]), 2),
         },
+        "frozen": {"on": frozen["frozen_on"], "created_now": created,
+                   "long": None if frozen.get("long") is None else combo_label(frozen["long"]),
+                   "short": None if frozen.get("short") is None else combo_label(frozen["short"])},
+        "today": today,
+        "sides": sides_out,
+        "forward": {"trades": fwd_sorted, "stats": stats([{"R": x["R"], "bars": x["bars"], "side": x["side"]} for x in fwd_sorted]),
+                    "open": forward_open},
         "levels": {"supports": sup, "resistances": res},
-        "current": current,
-        "walk_forward": wf,
-        "combos": {str(i): {"params": params[i], "label": combo_label(params[i])} for i in used},
-        "oos_stats": oos_stats,
-        "oos_by_side": {s: stats([x for x in oos if x["side"] == s]) for s in ("long", "short")},
-        "random_benchmark": bench,
-        "oos_trades": [fmt_tr(x) for x in sorted(oos, key=lambda x: x["in"])],
-        "oos_equity": eq,
-        "zigzag": zigzag_research(F, oos),
+        "zigzag": zigzag_research(F, ev["long"]["oos"] + ev["short"]["oos"]),
         "ohlc": [[d.strftime("%Y-%m-%d"), round(float(r.open), 2), round(float(r.high), 2), round(float(r.low), 2), round(float(r.close), 2)]
                  for d, r in zip(df.index, df.itertuples())],
         "sma200": [[d.strftime("%Y-%m-%d"), round(float(v), 2)] for d, v in zip(df.index, df["sma200"].values) if np.isfinite(v)],
     }
-    return out
 
 
 def sanitize(o):
@@ -794,48 +894,51 @@ def sanitize(o):
 
 def email_text(res):
     L = res["last"]
-    cur = res["current"]
-    lines = [f"CAC 40 — clôture du {L['date']} : {L['close']:.2f} (ATR14 {L['atr']:.2f}, RSI14 {L['rsi']:.1f}, SMA200 {L['sma200']:.2f})", ""]
-    subject_flag = "RAS"
-    if cur is None:
-        lines.append("Aucune configuration positive sur les 8 dernières années : pas de signal.")
-    else:
-        if cur["new_order"]:
-            o = cur["new_order"]
-            subject_flag = "SIGNAL " + ("ACHAT (call)" if o["side"] == "long" else "VENTE (short)")
-            lines += [
-                f"NOUVEAU SIGNAL {('ACHAT / CALL' if o['side']=='long' else 'VENTE / SHORT')}",
-                f"  Ordre stop de déclenchement : {o['trigger']:.2f} (valable {o['valid_sessions']} séances)",
-                f"  Stop (invalidation)         : {o['stop']:.2f}  (risque {o['risk_pts']:.2f} pts)",
-                f"  Objectifs                   : 2R {o['target_2R']:.2f} | 3R {o['target_3R']:.2f}",
-                "",
-            ]
-        elif cur["pending_order"]:
-            o = cur["pending_order"]
-            subject_flag = "ordre en attente"
-            lines += [f"Ordre en attente ({o['side']}) depuis le {o['signal_date']} : déclenchement {o['trigger']:.2f}, stop {o['stop']:.2f}, encore {o['sessions_left']} séance(s).", ""]
-        if cur["model_position"]:
-            p = cur["model_position"]
-            lines += [f"Position modèle ouverte : {p['side']} depuis le {p['entry_date']} à {p['entry']:.2f} (stop initial {p['stop_initial']:.2f}).", ""]
-        for side, name in (("long", "Rebond haussier"), ("short", "Retournement baissier")):
-            c = cur["conditions"][side]
-            parts = [f"excès {'✓' if c['exces']['ok'] else '✗'} ({c['exces']['valeur']}/{c['exces']['seuil']} ATR)",
-                     f"niveau {'✓' if c['niveau']['ok'] else '✗'} ({c['niveau']['valeur']} ATR de {c['niveau']['niveau']})"]
-            if c["rejet"]["actif"]:
-                parts.append(f"rejet {'✓' if c['rejet']['ok'] else '✗'}")
-            if c["rsi"]["actif"]:
-                parts.append(f"RSI {'✓' if c['rsi']['ok'] else '✗'} ({c['rsi']['valeur']})")
-            if c["tendance"]["actif"]:
-                parts.append(f"tendance {'✓' if c['tendance']['ok'] else '✗'}")
-            lines.append(f"{name} : " + ", ".join(parts))
-        lines += ["", "Configuration utilisée : " + cur["label"]]
+    lines = [f"CAC 40 — clôture du {L['date']} : {L['close']:.2f} (ATR14 {L['atr']:.2f}, RSI14 {L['rsi']:.1f}, SMA200 {L['sma200']:.2f})",
+             f"Source : {res['source']} · règles V2 gelées le {res['frozen']['on']}", ""]
+    flags = []
+    for s, name in (("long", "ACHAT / CALL"), ("short", "VENTE / SHORT")):
+        S, T = res["sides"][s], res["today"][s]
+        st = S["oos_stats"]
+        perf = (f"{st['n']} trades hors échantillon, espérance {st['expectancy']:+.2f} R (coût {res['config']['COST_POINTS']} pts inclus)"
+                if st.get("n") else "aucun trade hors échantillon")
+        status = "ACTIF" if S["active"] else "DÉSACTIVÉ (" + "; ".join(S["inactive_reasons"]) + ")"
+        lines.append(f"[{name}] {status} — {perf}")
+        if T is None:
+            lines += ["  Pas de règles gelées pour ce sens.", ""]
+            continue
+        c = T["conditions"]
+        parts = [f"excès {'✓' if c['exces']['ok'] else '✗'} ({c['exces']['valeur']}/{c['exces']['seuil']} ATR)"]
+        if c["rsi"]["actif"]:
+            parts.append(f"RSI {'✓' if c['rsi']['ok'] else '✗'} ({c['rsi']['valeur']} / {c['rsi']['seuil']})")
+        if c["rejet"]["actif"]:
+            parts.append(f"rejet {'✓' if c['rejet']['ok'] else '✗'}")
+        if c["tendance"]["actif"]:
+            parts.append(f"tendance {'✓' if c['tendance']['ok'] else '✗'}")
+        lines.append("  Conditions : " + ", ".join(parts))
+        o = T["new_order"]
+        if o:
+            if S["active"]:
+                flags.append("SIGNAL " + ("ACHAT" if s == "long" else "VENTE"))
+                lines += [f"  >>> NOUVEAU SIGNAL : ordre stop {o['trigger']:.2f} (valable {o['valid_sessions']} séances), "
+                          f"stop {o['stop']:.2f} (risque {o['risk_pts']:.2f} pts), objectifs 2R {o['target_2R']:.2f} / 3R {o['target_3R']:.2f}, "
+                          f"sortie du modèle : {'stop suiveur' if o['exit']=='trail' else o['exit']}"]
+            else:
+                flags.append("à blanc " + ("achat" if s == "long" else "vente"))
+                lines.append(f"  Signal À BLANC (sens désactivé, ne pas trader) : déclenchement {o['trigger']:.2f}, stop {o['stop']:.2f}.")
+        elif T["pending_order"]:
+            p = T["pending_order"]
+            lines.append(f"  Ordre en attente depuis le {p['signal_date']} : déclenchement {p['trigger']:.2f}, stop {p['stop']:.2f}, encore {p['sessions_left']} séance(s).")
+        if T["model_position"]:
+            p = T["model_position"]
+            lines.append(f"  Position modèle ouverte depuis le {p['entry_date']} à {p['entry']:.2f} (stop initial {p['stop_initial']:.2f}).")
+        lines.append("")
+    fw = res["forward"]["stats"]
+    lines.append(f"Suivi à blanc depuis le gel : {fw['n']} trade(s) clôturé(s)" + (f", {fw['total_R']:+.2f} R au total." if fw.get("n") else "."))
     lines += ["", "Supports : " + ", ".join(f"{z['price']:.0f} ({z['touches']}x)" for z in res["levels"]["supports"][:4]),
-              "Résistances : " + ", ".join(f"{z['price']:.0f} ({z['touches']}x)" for z in res["levels"]["resistances"][:4])]
-    s = res["oos_stats"]
-    if s.get("n"):
-        lines += ["", f"Historique hors échantillon : {s['n']} trades, réussite {s['win_rate']*100:.0f} %, espérance {s['expectancy']:+.2f} R/trade (hors frais)."]
-    lines += ["", "Outil d'aide à la décision, pas un conseil en investissement."]
-    return f"CAC40 Swing {L['date']} — {subject_flag}", "\n".join(lines)
+              "Résistances : " + ", ".join(f"{z['price']:.0f} ({z['touches']}x)" for z in res["levels"]["resistances"][:4]),
+              "", "Outil d'aide à la décision, pas un conseil en investissement."]
+    return f"CAC40 Swing {L['date']} — {' + '.join(flags) if flags else 'RAS'}", "\n".join(lines)
 
 
 def send_email(subject, body):
@@ -860,16 +963,21 @@ def send_email(subject, body):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="CAC 40 Swing — analyse des retournements sur niveaux clés")
+    ap = argparse.ArgumentParser(description="CAC 40 Swing V2")
     ap.add_argument("--csv", help="fichier CSV Date,Open,High,Low,Close (sinon Yahoo Finance)")
     ap.add_argument("--out", default="data/cac40_swing.json")
+    ap.add_argument("--frozen", default=CFG["frozen_file"], help="fichier des règles gelées")
     ap.add_argument("--email", action="store_true", help="envoyer le résumé par e-mail (secrets SMTP)")
     a = ap.parse_args()
     if a.csv:
         df, src = load_csv(a.csv), f"CSV {os.path.basename(a.csv)}"
     else:
         df, src = load_yahoo(CFG["ticker"]), f"Yahoo Finance {CFG['ticker']}"
-    res = run(df, src)
+        df, dropped = drop_unfinished_bar(df)
+        if dropped:
+            src += " (séance en cours exclue)"
+            print("Séance du jour non clôturée : exclue de l'analyse.")
+    res = run(df, src, a.frozen)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     with open(a.out, "w", encoding="utf-8") as f:
         json.dump(sanitize(res), f, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
